@@ -1,0 +1,290 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r setup}
+library(RSQLite)
+
+dbfile <- "Author.sqlite"
+dbcon <- dbConnect(RSQLite::SQLite(), dbfile)
+```
+```{r} 
+dbExecute(dbcon, "PRAGMA foreign_keys = ON")
+```
+
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Author;
+```
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Module_Instructor;
+```
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Module;
+```
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Audit;
+```
+
+```{sql connection=dbcon}
+CREATE TABLE Author(
+  aid NUMBER NOT NULL,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  affliation TEXT NOT NULL,
+  PRIMARY KEY (aid),
+  CONSTRAINT CHK_affliation CHECK(affliation = 'PT' OR affliation ='FT' OR affliation =='Contract')
+);
+```
+```{sql connection=dbcon}
+CREATE TABLE Module(
+  moduleNumber TEXT NOT NULL,
+  title TEXT NOT NULL,
+  lengthInMin NUMBER NOT NULL,
+  aid NUMBER NOT NULL,
+  PRIMARY KEY (moduleNumber)
+);
+```
+```{sql connection=dbcon}
+CREATE TABLE Module_Instructor(
+  miID INTEGER PRIMARY KEY AUTOINCREMENT,
+  moduleNumber TEXT NOT NULL,
+  aid TEXT,
+  FOREIGN KEY (moduleNumber) REFERENCES Module(moduleNumber)
+);
+```
+```{sql connection=dbcon}
+  -- Insert a new row into the Audit table
+CREATE TABLE Audit(
+  module_number NUMBER NOT NULL,
+  old_aid NUMBER NOT NULL,
+  new_aid NUMBER NOT NULL,
+  modified_by TEXT NOT NULL,
+  modified_at TEXT NOT NULL
+);  
+```
+```{sql connection=dbcon}
+INSERT INTO Author (aid,name,email,affliation) VALUES 
+  (234,"Mika","rita@northeastern.edu","PT"),
+  (235,"Gaby","gaby@northeastern.edu","Contract")
+```
+```{sql connection=dbcon}
+INSERT INTO Module (moduleNumber,title,lengthInMin,aid) VALUES 
+  ("CS5800","Algorithms",600,233),
+  ("CS5500","Software Engineering",500,235)
+```
+```{sql connection=dbcon}
+INSERT INTO Module_Instructor (moduleNumber,aid)  
+  select Module.moduleNumber, Module.aid from Module 
+```
+
+```{sql connection=dbcon}
+SELECT *FROM Module_Instructor
+```
+```{sql connection=dbcon}
+SELECT *FROM Module;
+```
+```{sql connection=dbcon}
+SELECT *FROM Author;
+```
+
+<!-- ****************************************** TABLE CREATION AND INSERTIONS END ********************************** -->
+
+<!--*******************************************************  Trigger 1  ***************************************************
+When we try to add more courses to a instructor in table this trigger will throw error saying the Author limit exceeded. This applies an upper bound on number of modules that can be assigned to an author aid. In this below trigger that check takes place on a derived value count( DISTINCT moduleNumber ) for the authorid
+-->
+```{sql connection=dbcon}
+CREATE TRIGGER IF NOT EXISTS check_author_count_on_modules
+  BEFORE INSERT ON Module_Instructor
+  BEGIN
+  SELECT 
+    CASE
+        WHEN 2< (SELECT COUNT( DISTINCT moduleNumber) FROM Module_Instructor WHERE aid = NEW.aid)  
+        THEN RAISE(ABORT,'Author limit exceeded')
+    END;
+  END;
+```
+<!--
+This below in comments test case will fail when we run, them saying "Author limit exceeded" as we are trying to assign more dhan 2 modules for
+the author id 233
+
+NEGATIVE TEST CASE:
+```{sql connection=dbcon}
+INSERT INTO Module_Instructor(moduleNumber, aid)
+VALUES ("CS5200",233)
+("CS5700",233)
+```
+--> 
+<!--
+POSITIVE TEST CASE: This below insert will work fine
+-->
+```{sql connection=dbcon}
+INSERT INTO Module_Instructor(moduleNumber, aid)
+VALUES ("CS5200",233)
+```
+<!--***************************************** TRIGGER 1 AND TEST CASES ENDS ******************************************-->
+
+
+<!--*******************************************************  Trigger 2  ***************************************************
+When a author/ course instructor leaves the college, we usually tend to delete  his/her record from Author table. Similarly we should remove the record automatically from module table, as that author will no longer be handling that course. This below trigger will take care of that to maintain consistency of data among all the tables.
+-->
+
+```{sql connection=dbcon}
+CREATE TRIGGER IF NOT EXISTS Delete_from_Module_When_Author_Details_Removed
+  AFTER DELETE ON Author
+  BEGIN
+    DELETE FROM Module
+        Where aid = OLD.aid;
+  END;
+```
+<!--
+TEST CASE FOR Trigger 2 where we delete 235 aid from Author ID, this author has left the college, The corresponding record in Module that aid 235 handles will also be deleted.
+-->
+```{sql connection=dbcon}
+DELETE FROM Author where aid=235;
+```
+```{sql connection=dbcon}
+SELECT * FROM Module
+```
+<!--***************************************** TRIGGER 2 AND TEST CASES ENDS ******************************************-->
+
+<!--
+ *************************************************  Trigger 3 *****************************************************
+This simple trigger was created to update the moduleNumber to UPPER CASE as the course numbers in Northeastern usually will have CS5200 but when the user wants to enter as cs5200, the sql would not identify this in real time web sites, so its better to create a trigger to update this value in Module Table.
+-->
+```{sql connection=dbcon}
+CREATE TRIGGER IF NOT EXISTS Upper_Case_moduleNumber
+  AFTER INSERT ON Module
+  BEGIN
+    UPDATE Module
+        SET moduleNumber=UPPER(moduleNumber);
+  END;
+```
+<!--
+TEST CASE FOR Trigger 3 where moduleNumber has lowercase values
+!-->
+```{sql connection=dbcon}
+INSERT INTO Module (moduleNumber,title,lengthInMin,aid) VALUES 
+  ("cs5400","DBMS",500,233),
+  ("Cs5900","Algorithms",600,233),
+  ("CS5600","Software Engineering",500,235)
+```
+```{sql connection=dbcon}
+SELECT * FROM Module;
+```
+<!--***************************************** TRIGGER 3 AND TEST CASES ENDS ******************************************-->
+
+
+<!--
+***************************************************** Trigger 4 *********************************************************
+This Trigger will raise an error when length of the module is less than 1 or any negative values, as the course should have a valid course duration.
+-->
+```{sql connection=dbcon}
+CREATE TRIGGER IF NOT EXISTS length_Greater_Than_1_lengthInMin
+  BEFORE INSERT ON Module
+  BEGIN
+    SELECT
+      CASE
+        WHEN NEW.lengthInMin<1
+        THEN RAISE(ABORT,'lengthInMin should be greater than 1')
+    END;
+  END;
+```
+<!--
+TEST CASE FOR Trigger 4 when lengthInMin is less than 1, Throws error.
+Error: lengthInMin should be greater than 1
+Failed to execute SQL chunk
+
+NEGATIVE TEST CASE:
+```{sql connection=dbcon}
+INSERT INTO Module (moduleNumber,title,lengthInMin,aid) VALUES 
+  ("cs5200","DBMS",0,233)
+```
+-->
+
+<!--
+Below is the positive test case as the duration should be greater than 0.
+-->
+```{sql connection=dbcon}
+INSERT INTO Module (moduleNumber,title,lengthInMin,aid) VALUES 
+  ("CS8900","DBMS",100,233)
+```
+<!--***************************************** TRIGGER 4 AND TEST CASES ENDS ******************************************-->
+
+
+
+<!--
+**************************************************** Trigger 5 *******************************************************
+This Trigger will raise an error when email is not entered properly when entered without @ and .
+-->
+```{sql connection=dbcon}
+CREATE TRIGGER IF NOT EXISTS Invalid_Author_Email_Validation 
+   BEFORE INSERT ON Author
+BEGIN
+   SELECT
+      CASE
+	WHEN NEW.email NOT LIKE '%_@_%.__%' THEN
+   	  RAISE (ABORT,'Invalid Email Address, Please Enter a Valid email address')
+       END;
+END;
+```
+<!--
+TEST CASE FOR Trigger 5 when email does not have @ or . 
+-->
+<!-- ALL three below inserts will fail
+Error: Invalid Email Address, Please Enter a Valid email address
+Failed to execute SQL chunk
+
+NEGATIVE TEST CASES:
+
+```{sql connection=dbcon}
+INSERT INTO Author (aid,name,email,affliation) VALUES 
+  (233,"Rita","rita","FT")
+```
+```{sql connection=dbcon}
+INSERT INTO Author (aid,name,email,affliation) VALUES 
+  (233,"Rita","rita@","FT")
+```
+```{sql connection=dbcon}
+INSERT INTO Author (aid,name,email,affliation) VALUES 
+  (233,"Rita","rita@.com","FT")
+```
+-->
+
+<!--
+This query will work fine as the email validation will pass through.
+-->
+```{sql connection=dbcon}
+INSERT INTO Author (aid,name,email,affliation) VALUES 
+  (233,"Rita","rita@.northeastern.com","FT")
+```
+<!--***************************************** TRIGGER 5 AND TEST CASES ENDS ******************************************-->
+
+<!--
+********************************************************* TRIGGER 6 *****************************************************
+This below trigger will keep track of the old and new authors when we update them in the module table using a separate audit table.
+We have also updated the value in Module_Instructor look up table to ensure there are no data inconsitency.
+-->
+
+```{sql connection=dbcon}
+CREATE TRIGGER IF NOT EXISTS audit_authors 
+AFTER UPDATE ON Module
+FOR EACH ROW
+BEGIN
+INSERT INTO Audit (module_number, old_aid, new_aid, modified_by, modified_at) 
+  VALUES (OLD.moduleNumber, OLD.aid, NEW.aid, "ADMIN", TIME());
+UPDATE Module_Instructor SET aid = NEW.aid  WHERE moduleNumber=OLD.moduleNumber;
+END;
+```
+<!--
+TEST CASES for auditing the authors. CS5400 earlier was instructed by authorid 233 now its updated to 236 and the same has been tracked by Audit Table.
+-->
+```{sql connection= dbcon}
+UPDATE Module SET aid=255 where moduleNumber="CS5800"
+```
+```{sql connection= dbcon}
+SELECT * FROM Audit;
+```
+```{sql connection= dbcon}
+SELECT * FROM Module_Instructor;
+```
+<!--******************************************* TRIGGER 6 AND TEST CASES ENDS **********************************************-->

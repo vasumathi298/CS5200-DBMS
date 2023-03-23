@@ -1,0 +1,70 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+ 
+
+```{r setup}
+library(RSQLite)
+library(sqldf)
+library(ggplot2)
+
+dbfile <- "MediaDB.db"
+dbcon <- dbConnect(RSQLite::SQLite(), dbfile)
+```
+<!-- 
+1
+-->
+```{r}
+sqlCmd = "SELECT * FROM invoice_items"
+rs = dbGetQuery(dbcon, sqlCmd)
+head(rs)
+rs['ItemPrice']= rs['Quantity'] * rs['UnitPrice']
+head(rs)
+print(paste0("10% trimmed mean: ",(round(mean(rs$ItemPrice,trim = 0.10),2))))
+```
+<!-- 
+2
+-->
+```{r}
+result <- sqldf("SELECT [InvoiceId],SUM(ItemPrice)  AS sum_of_itemprice , COUNT([TrackId]) AS count_of_items FROM rs GROUP BY [InvoiceId]")
+result
+```
+
+
+<!-- 
+3
+-->
+```{r}
+rsPlot <- sqldf("SELECT count_of_items, ROUND(SUM(sum_of_itemprice)/COUNT(*),2) totalPrice FROM result GROUP BY count_of_items")
+rsPlot
+ggplot(data=rsPlot, aes(x=count_of_items, y=totalPrice)) + geom_line(color="blue") + geom_point(color="red") + xlab("Number of Items") + ylab("Average of Total Price of Items")+
+ggtitle("Number of Items VS Average of Total Price of Items") + geom_label(aes(count_of_items,totalPrice,label=paste(count_of_items,totalPrice,sep=",")))
+
+```
+<!-- 
+3 (NOTE:should run only once as the column DiscPrice will be already created and sqlite does not support to check if
+column exists while dropping)  so it will throw error saying Error: duplicate column name: DiscPrice
+-->
+```{r}
+alterCmd <- "ALTER TABLE invoices ADD COLUMN DiscPrice"
+dbGetQuery(dbcon, alterCmd)
+selectSqlCmd <- "SELECT * FROM invoices"
+updateWithDiscount <- "UPDATE INVOICES SET DiscPrice = Total * 0.9
+WHERE InvoiceId IN
+(
+SELECT InvoiceId FROM invoice_items GROUP BY InvoiceId HAVING COUNT(Quantity) > 10
+);"
+updateWithNoDisc <- "UPDATE INVOICES SET DiscPrice = Total
+WHERE InvoiceId IN
+(
+SELECT InvoiceId FROM invoice_items GROUP BY InvoiceId HAVING COUNT(Quantity) <= 10
+);"
+dbExecute(dbcon, updateWithDiscount)
+dbExecute(dbcon, updateWithNoDisc)
+```
+```{r}
+dbGetQuery(dbcon,selectSqlCmd)
+```
+
+

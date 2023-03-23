@@ -1,0 +1,139 @@
+---
+title: "Narayanan.CRDB.CS5200"
+output: html_document
+date: "2023-01-31"
+---
+
+
+```{r setup}
+library(RSQLite)
+
+dbfile <- "AuthorDB.sqlite"
+dbcon <- dbConnect(RSQLite::SQLite(), dbfile)
+```
+```{r} 
+dbExecute(dbcon, "PRAGMA foreign_keys = ON")
+```
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Author;
+```
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Module_Instructor;
+```
+```{sql connection=dbcon}
+DROP TABLE IF EXISTS Module;
+```
+
+```{sql connection=dbcon}
+CREATE TABLE Author(
+  aid NUMBER NOT NULL,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  affliation TEXT NOT NULL,
+  PRIMARY KEY (aid),
+  CONSTRAINT CHK_affliation CHECK(affliation = 'PT' OR affliation ='FT' OR affliation =='Contract')
+);
+```
+```{sql connection=dbcon}
+CREATE TABLE Module(
+  moduleNumber TEXT NOT NULL,
+  title TEXT NOT NULL,
+  lengthInMin NUMBER NOT NULL,
+  aid NUMBER NOT NULL,
+  PRIMARY KEY (moduleNumber)
+);
+```
+
+<!--
+A joint table is created for satisfying all the many to many relationships.
+miID is a surrogate key that gets autoincremented. Constraints are defined appropriately.
+aid cant be given as NOT NULL as the aid can be [0..*] hence it cant be a foreign key.
+So we can give moduleNumber to be a foreign key.
+-->
+```{sql connection=dbcon}
+CREATE TABLE Module_Instructor(
+  miID INTEGER PRIMARY KEY AUTOINCREMENT,
+  moduleNumber TEXT NOT NULL,
+  aid TEXT,
+  FOREIGN KEY (moduleNumber) REFERENCES Module(moduleNumber)
+);
+```
+```{sql connection=dbcon}
+INSERT INTO Module (moduleNumber,title,lengthInMin,aid) VALUES 
+  ("CS5200","DBMS",500,233),
+  ("CS5800","Algorithms",600,233),
+  ("CS5500","Software Engineering",500,235)
+```
+
+<!--
+INSERT INTO Module (moduleNumber,title,lengthInMin,aid) VALUES 
+  ("C5600","DBMS",500,NULL)
+This above insert will saying :
+NOT NULL Constraint failed: Module.aid
+The relationship constraint mentioned in the question states,
+a course should have [1..*] author mapped to it, so it cannot be NULL.
+-->
+
+<!--
+INSERT INTO Module (moduleNumber,title,lengthInMin,aid) VALUES 
+  ("CS5200","DBMS",500,233)
+This above insert will fail saying:
+UNIQUE constraint failed: Module.moduleNumber
+as it violates the primary key constraint and its trying to insert the RECORD with same Primary key
+-->
+
+```{sql connection=dbcon}
+INSERT INTO Author (aid,name,email,affliation) VALUES 
+  (233,"Rita","rita@northeastern.edu","FT"),
+  (234,"Mika","rita@northeastern.edu","PT"),
+  (235,"Gaby","gaby@northeastern.edu","Contract")
+```
+```{sql connection=dbcon}
+INSERT INTO Module_Instructor (moduleNumber,aid)  
+  select Module.moduleNumber, Module.aid from Module 
+```
+
+```{sql connection=dbcon}
+INSERT INTO Module_Instructor(moduleNumber, aid)
+VALUES ("CS5500",233);
+```
+<!--
+INSERT INTO Author (aid,name,email,affliation) VALUES 
+  (233,"Rita","rita@northeastern.edu","FullTime")
+This above insert will fail saying:
+CHECK constraint failed:CHK_affliation
+as the check has been made for column affliation to have value as FT,PT or contract & cant hold other values
+-->
+<!--
+INSERT INTO Author (aid,name,email,affliation) VALUES 
+  (233,"Rita","rita@northeastern.edu","FT")
+This above insert will fail saying:
+UNIQUE constraint failed: Author.aid
+as it violates the primary key constraint and its trying to insert the RECORD with same Primary key
+-->
+
+```{sql connection=dbcon}
+SELECT * FROM Module;
+```
+
+```{sql connection=dbcon}
+SELECT * FROM Author;
+```
+```{sql connection=dbcon}
+SELECT * FROM Module_Instructor;
+```
+<!--
+In this below query we can observe the following:
+In relationship constraints mentioned in the question, 
+  * Author can have [0..*] 0 or many courses mapped 
+  * Module must have [1..*] atleast 1 or many authors mapped to it.
+While running the below SELECT statement we can observe all the relationship constraints are fulfilled.
+ - Author with aid 234 does not have any record mapped. [ 0 module constraint is achieved ]
+ - Author with aid 233 has many courses mapped to him/her (CS5200,CS5800). [ * many modules are also allowed ]
+ - All the modules have atleast one author mapped to it [1 author mapped to a module constraint is attained]
+ - Module with moduleNumber CS5500 has two authors with aid (233,235).[ many author for a module condition is achieved]
+-->
+```{sql connection=dbcon}
+SELECT Module_Instructor.moduleNumber, Author.aid, Author.name, Author.email, Author.affliation FROM Author,Module_Instructor where Module_Instructor.aid= Author.aid;
+```
+

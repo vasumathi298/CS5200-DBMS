@@ -1,0 +1,357 @@
+---
+title: "Practicum I CS5200"
+author: "Gowreesh Gunupati, Vasumathi Narayanan"
+date: "Spring 2023"
+output: pdf_document
+---
+
+## Question 3 - Connect to Database
+
+```{r connectToDatabase}̥
+library(RMySQL)
+library(sqldf)
+library(lubridate)
+birdStrikesDBCon = dbConnect(RMySQL::MySQL(),
+                            dbname='birdstrikes',
+                            host='localhost',
+                            port=3306,
+                            user='ecommerceapp',
+                            password='ecommerceapp')
+```
+
+```{sql connection=birdStrikesDBCon}
+#show global variables like 'local_infile';
+set global local_infile = TRUE;
+```
+
+
+This is loaded to use sqldf for loading the data frame with respective columns.
+
+```{r}
+options(sqldf.driver = "SQLite")
+```
+
+## Drop If Tables already Exist
+
+```{sql connection=birdStrikesDBCon}
+DROP TABLE IF EXISTS incidents;
+```
+```{sql connection=birdStrikesDBCon}
+DROP TABLE IF EXISTS airports;
+```
+```{sql connection=birdStrikesDBCon}
+DROP TABLE IF EXISTS conditions;
+```
+```{sql connection=birdStrikesDBCon}
+DROP TABLE IF EXISTS airlines;
+```
+
+
+
+We have created the airports table with the appropriate attributes and the constraints are mentioned as below. aid is a synthetic primary key, so we have added AUTO_INCREMENT for that.
+
+```{sql createTableAirportForDB, connection = birdStrikesDBCon}
+CREATE TABLE airports (
+  aid INT AUTO_INCREMENT,
+  airportName VARCHAR(100) ,
+  airportCode VARCHAR(10),
+  state VARCHAR(100),
+  PRIMARY KEY(aid)
+  ); 
+```
+
+We have created the conditions table with the appropriate attributes and the constraints are mentioned as below. cid is the primary key here.
+
+```{sql createTableConditionsForDB, connection = birdStrikesDBCon}
+CREATE TABLE conditions (
+cid INT(10) AUTO_INCREMENT,
+skyCondition VARCHAR(50),
+explaination VARCHAR(50),
+PRIMARY KEY(cid)
+);
+```
+
+We have created the airlines table with the appropriate attributes and the constraints are mentioned as below. "eid" is the synthetic primary key so we have added AUTO_INCREMENT.
+
+```{sql createTableAirlinesForDB, connection = birdStrikesDBCon}
+CREATE TABLE airlines (
+eid INT AUTO_INCREMENT, 
+airlineName VARCHAR(50),
+airlineCode VARCHAR(50),
+flag VARCHAR(10),
+PRIMARY KEY(eid)
+); 
+```
+
+We have created the incidents table with the appropriate attributes and the constraints are mentioned as below. 
+
+```{sql createTableIncidentsForDB, connection = birdStrikesDBCon}
+CREATE TABLE incidents(
+  rid INT,
+  depDate DATE,
+  origin INT NOT NULL ,
+  airline INT NOT NULL,
+  aircraft VARCHAR(50),
+  flightPhase VARCHAR(20),
+  altitude INT,
+  conditions INT NOT NULL,
+  warned TINYINT,
+  PRIMARY KEY (rid),
+  CONSTRAINT CHK_altitude CHECK (altitude>=0),
+  FOREIGN KEY (origin) REFERENCES airports(aid),
+  FOREIGN KEY (conditions) REFERENCES conditions(cid),
+  FOREIGN KEY (airline) REFERENCES airlines(eid),
+  CONSTRAINT CHK_flightPhase CHECK (flightPhase = 'takeoff' OR flightPhase='landing' OR flightPhase='inflight' OR flightPhase ='unknown')
+  );
+  
+  
+```
+## Verifying Schemas for birdstrikes
+
+```{sql checkIncientsSchemas, connection = birdStrikesDBCon, eval =F}
+DESC  incidents;
+```
+
+```{sql checkAirportsSchemas, connection = birdStrikesDBCon, eval =F}
+DESC airports;
+```
+```{sql checkConditionsSchemas, connection = birdStrikesDBCon, eval =F}
+
+DESC conditions;
+```
+```{sql checkAirlinesSchemas, connection = birdStrikesDBCon, eval =F}
+DESC airlines;
+```
+
+
+## Question 5 Loading CSV to R Dataframe
+```{r loadingBirdStrikesToDataframe}
+bds.raw<- read.csv("BirdStrikesData-V2.csv", header = TRUE, sep = ",")
+head(bds.raw)
+```
+
+## Data Cleaning and pre-processing to format the date
+
+1. We are normalizing the flight phases to have only values takeoff,landing,inflight,unknown
+2. The flight_date field was transformed into
+```{r parseDateforDeparture}
+bds.raw$flight_date<- parse_date_time(bds.raw$flight_date, orders=c("m-d-y H:M","m/d/y H:M"))
+bds.raw$flight_date <- format(bds.raw$flight_date,"%Y-%m-%d")
+```
+```{r cleaningSentinelData}
+case5 <- which(bds.raw$airline=='')
+bds.raw[case5,"airline"] <- 'unknown'
+
+case6 <- which(bds.raw$aircraft=='')
+bds.raw[case5,"aircraft"] <- 'unknown'
+```
+## Harmonizing the flight phases to be one of takeoff, landing, inflight, unknown.
+```{r harmonizingFlightPhases}
+case1 <- which(bds.raw$flight_phase=='Take-off run' | bds.raw$flight_phase=='Climb' )
+bds.raw[case1,"flight_phase"] <- 'takeoff'
+
+case2 <- which(bds.raw$flight_phase=='Landing Roll'|bds.raw$flight_phase=='Taxi'|bds.raw$flight_phase=='Parked')
+bds.raw[case2,"flight_phase"] <- 'landing'
+
+case3 <-which(bds.raw$flight_phase=='Approach' | bds.raw$flight_phase=='Descent')
+bds.raw[case3,"flight_phase"] = 'inflight'
+
+case4 <- which(bds.raw$flight_phase=='')
+bds.raw[case4,"flight_phase"] <- 'unknown'
+```
+## Change the warned flag as tinyint datatype based on pilot_warned_flag
+```{r changingFlags}
+warned <- which(bds.raw$pilot_warned_flag=="Y")
+notwarned <- which(bds.raw$pilot_warned_flag=='N')
+
+bds.raw[warned,"pilot_warned_flag"] <- 1
+bds.raw[notwarned,"pilot_warned_flag"] <- 0
+```
+
+## omit flights without flight information
+```{r omitEmptyFlightDetails}
+bds.raw <- bds.raw[which(bds.raw$airport!='' & bds.raw$model!='' & bds.raw$origin!='' ),]
+```
+
+
+## Question 6 Loading R Dataframe to bird-strikes-DB
+
+### Inserting into conditions table
+
+```{r insertToairportsTable}
+conditionsdata <- sqldf::sqldf("SELECT distinct(sky_conditions) as skyCondition from [bds.raw]");
+dbWriteTable(birdStrikesDBCon, "conditions", conditionsdata, append = TRUE, row.names = FALSE)
+n.conditionsdata <- nrow(conditionsdata)
+conditionsdata$cid <- seq(1, n.conditionsdata)
+```
+
+
+### Inserting into airlines table
+```{r insertToairlineTable}
+airlinesData <- sqldf::sqldf("select distinct(TRIM(airline)) as airlineName, pilot_warned_flag as flag  from [bds.raw]");
+dbWriteTable(birdStrikesDBCon, "airlines", airlinesData, append = TRUE, row.names = FALSE)
+n.airlinesData <- nrow(airlinesData)
+airlinesData$eid <- seq(1, n.airlinesData)
+```
+
+### Inserting into airport table
+
+```{r insertToairportTable}
+airportsdata <- sqldf::sqldf("select distinct(trim(airport)) as airportName,  origin as state from [bds.raw]")
+dbWriteTable(birdStrikesDBCon, "airports", airportsdata, append = TRUE, row.names = FALSE)
+n.airportsdata <- nrow(airportsdata)
+airportsdata$aid <- seq(1, n.airportsdata)
+```
+
+### Inserting into incidents table
+```{r insertToIncidentsTable}
+incidentsdata <- sqldf::sqldf("select rid, flight_date as depDate, origin, airport, airline, aircraft,flight_phase as flightPhase, altitude_ft as altitude, sky_conditions as conditions, pilot_warned_flag as warned from [bds.raw]");
+n.incidentsdata <- nrow(incidentsdata)
+for(r in 1:n.incidentsdata)
+{
+  
+  a <- airportsdata$aid[which(airportsdata$airportName == incidentsdata$airport[r])]
+  incidentsdata$origin[r] <- a
+  
+  b <- conditionsdata$cid[which(conditionsdata$skyCondition == incidentsdata$conditions[r])]
+  incidentsdata$conditions[r] <- b
+  
+  c<-airlinesData$eid[which(airlinesData$airlineName == incidentsdata$airline[r])] 
+  incidentsdata$airline[r] <- c[[1]][1]
+  
+}
+
+incidentsdata <- sqldf::sqldf("select rid, depDate , origin, airline, aircraft,flightPhase, altitude, conditions, warned from incidentsdata");
+
+dbWriteTable(birdStrikesDBCon, "incidents", incidentsdata, append = TRUE, row.names = FALSE)
+
+```
+
+## Question 7
+```{sql connection=birdStrikesDBCon}
+SELECT * from conditions limit 5;
+```
+```{sql connection=birdStrikesDBCon}
+SELECT * from airports limit 5;
+```
+```{sql connection=birdStrikesDBCon}
+SELECT * from airlines limit 5;
+```
+```{sql connection=birdStrikesDBCon}
+SELECT * from incidents limit 5;
+```
+
+## Question 8
+```{sql connection=birdStrikesDBCon}
+select airports.state, COUNT(incidents.rid) as "Number of Incidents" from incidents,airports  where airports.aid= incidents.origin GROUP BY (airports.state) ORDER BY COUNT(incidents.rid) DESC LIMIT 10;
+```
+
+## Question 9
+```{sql connection=birdStrikesDBCon}
+select distinct  airlines.airlineName, COUNT(incidents.rid) as "num_incidents"
+from incidents,airlines 
+where airlines.eid= incidents.airline
+GROUP BY (airlines.airlineName) HAVING num_incidents>
+(SELECT AVG(num_incidents) FROM (select distinct  airlines.airlineName, COUNT(incidents.rid) as "num_incidents"
+from incidents,airlines 
+where airlines.eid= incidents.airline
+GROUP BY airlines.airlineName) as average);
+```
+
+## Question 10
+
+```{r groupByMonthAndFlightPhase}
+no_of_incidents_group_by_month<- dbGetQuery(birdStrikesDBCon,"select distinct MONTH(depDate) as months , COUNT(rid) as num_of_incidents_by_month from incidents group by MONTH(depDate) ORDER BY  MONTH(depDate)")
+no_of_incidents_group_by_flightphase <-dbGetQuery(birdStrikesDBCon,"select distinct incidents.flightPhase , COUNT(rid) as num_of_incidents_by_flightphase from incidents group by incidents.flightPhase")
+```
+```{r}
+head(no_of_incidents_group_by_month,6)
+head(no_of_incidents_group_by_flightphase,6)
+```
+
+## Question 11
+```{r plotNoOfIncidentsVsMonths, fig.height = 4}
+plot(x = no_of_incidents_group_by_month$months,y = 
+       no_of_incidents_group_by_month$num_of_incidents_by_month
+,
+   xlab = "Month",
+   ylab = "No of Bird Strikes",
+   main = "Month vs Number of Bird Strike Incidents",
+   col =  "blue",
+   type = "b")
+
+text(no_of_incidents_group_by_month$months, no_of_incidents_group_by_month$num_of_incidents_by_month, labels=no_of_incidents_group_by_month$num_of_incidents_by_month, cex = 0.5, pos = 4)
+
+legend(x = "topleft", legend=c("Number of bird strikes reported"), col = c("blue"), lty=1:2, cex=0.8, lwd = 2 )
+
+
+```
+
+## Question 12
+
+```{sql connection=birdStrikesDBCon}
+drop procedure if exists add_incident;
+```
+
+```{sql connection=birdStrikesDBCon}
+create procedure add_incident(
+in airport1 text, 
+in state1 text, 
+in date1 date, 
+in airline1 text, 
+in aircraft1 text, 
+in flightPhase1 text, 
+in altitude1 int, 
+in condition1 text, 
+in warning1 tinyint )
+
+begin
+
+declare cid1 int;
+declare aid1 int default 0;
+declare rid1 int;
+declare eid1 int;
+
+SELECT cid INTO cid1 FROM conditions WHERE conditions.skyCondition = condition1 ;
+
+SELECT aid INTO aid1 FROM airports WHERE airportName = airport1 AND state = state1 ;
+
+SELECT eid INTO eid1 FROM airlines WHERE airlineName= airline1 and flag=warning1;
+
+SELECT (MAX(rid) + 1) INTO rid1 FROM incidents ;
+
+IF aid1 = 0 THEN
+SELECT (MAX(aid) + 1) INTO aid1 FROM airports ;
+  INSERT INTO airports(aid, airportName, state) VALUES ( aid1, airport1, state1 ) ;
+  END IF;
+
+INSERT INTO incidents(rid, depDate,origin, airline, aircraft, flightPhase, altitude, conditions, warned) VALUES ( rid1, date1, aid1, eid1, aircraft1, flightPhase1, altitude1, cid1, warning1 ) ;
+end
+```
+
+
+
+```{sql connection=birdStrikesDBCon}
+call add_incident(
+'Newyork Airport',
+'New York',
+'2022-01-01',
+'BUSINESS',
+'Airplane',
+'takeoff',
+363,
+'Overcast',
+0);
+```
+
+```{sql connection=birdStrikesDBCon}
+select * from incidents where depDate = '2022-01-01'
+```
+
+```{sql connection=birdStrikesDBCon}
+select * from airports where airportName = 'Newyork Airport'
+```
+## Disconnecting database
+```{r}
+dbDisconnect(birdStrikesDBCon)
+```
